@@ -1,0 +1,190 @@
+name: ci
+
+env:
+  PROJECT_NAME: foobar
+
+on:
+  push:
+    branches: [ build.project ]
+  pull_request:
+    branches: [ build.project ]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  # Grab the source and run style-check
+  style:
+
+    runs-on: ubuntu-latest
+    container: debian:bullseye
+
+    steps:
+    - name: Grab sources
+      uses: actions/checkout@v2
+    - name: Prepare container
+      run: |
+        ./scripts/pkgs/debian:bullseye.sh
+    - name: check
+      run: |
+        cd scripts
+        ./style.sh
+
+  # Grab and build the source on multiple Linux distributions and "upload" the
+  # deb-packages generated on Debian Bullseye / 11
+  linux-build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        container:
+        #- 'alpine:3.12.0'
+        #- 'archlinux:20200306'
+        #- 'archlinux:latest'
+        #- 'centos:centos7'
+        - 'debian:bullseye'
+        #- 'debian:buster'
+        #- 'debian:stretch'
+        #- 'ubuntu:bionic'
+        #- 'ubuntu:focal'
+        #- 'ubuntu:xenial'
+
+    container:
+          image: ${{ matrix.container }}
+
+    steps:
+    - name: Grab sources
+      uses: actions/checkout@v2
+
+    - name: Configure
+      run: |
+        source ./scripts/pkgs/${{ matrix.container }}.sh
+        make config
+
+    - name: Build
+      run: |
+        source ./scripts/pkgs/${{ matrix.container }}.sh
+        make
+
+    - name: Install
+      run: |
+        source ./scripts/pkgs/${{ matrix.container }}.sh
+        make install
+
+    - name: Execute hello-world
+      run: ${PROJECT_NAME}_hw
+
+    - name: Upload Debian Packages
+      uses: actions/upload-artifact@v2
+      if: ${{ matrix.container == 'debian:bullseye' }}
+      with:
+        name: deb-packages
+        path: build/*.deb
+
+  # smoketest the deb-packages built on Debian Bullseye / 11 using CIJOE
+  linux-smoketest:
+    needs: linux-build
+    runs-on: ubuntu-latest
+    container:
+      image: "debian:bullseye"
+
+    steps:
+
+    - name: Container-prep, install
+      run: |
+        apt-get -qy update
+        apt-get -qy -o "Dpkg::Options::=--force-confdef" -o "Dpkg::Options::=--force-confold" upgrade
+        apt-get -qy autoclean
+        apt-get -qy install aptitude
+        aptitude -q -y -f install python3-pip pylint3
+        aptitude -q -y -f install ssh openssh-server lshw time procps
+        ln -s /usr/bin/python3.8 /usr/bin/python
+        pip3 install cijoe
+
+    - name: Container-prep, configure SSH
+      run: |
+        echo "PermitRootLogin yes" >> /etc/ssh/sshd_config
+        systemctl enable ssh
+        service ssh restart
+        service ssh status
+        SSH_CONFIG_ROOT=/root/.ssh
+        mkdir -p ${SSH_CONFIG_ROOT}
+        chmod 0700 ${SSH_CONFIG_ROOT}
+        ssh-keygen -b 2048 -t rsa -f ${SSH_CONFIG_ROOT}/id_rsa -q -N ""
+        cp ${SSH_CONFIG_ROOT}/id_rsa.pub ${SSH_CONFIG_ROOT}/authorized_keys
+        ssh-keyscan localhost > ${SSH_CONFIG_ROOT}/known_hosts
+        echo "Host *" >> ${SSH_CONFIG_ROOT}/config
+        echo "  StrictHostKeyChecking no" >> ${SSH_CONFIG_ROOT}/config
+        echo "  IdentityFile ${SSH_CONFIG_ROOT}/id_rsa" >> ${SSH_CONFIG_ROOT}/config
+        chmod 400 ${SSH_CONFIG_ROOT}/config
+        ls -lh ${SSH_CONFIG_ROOT}
+        ssh root@localhost "ls"
+
+    - name: Container-prep, download Debian packages
+      uses: actions/download-artifact@v2
+      with:
+        name: deb-packages
+
+    - name: Container-prep, install Debian packages
+      run: dpkg -i *.deb
+
+    - name: CIJOE, define and create result folder
+      run: |
+        mkdir /tmp/results
+        echo "::set-env name=RESULTS::$(mktemp -d -p /tmp/results)"
+
+    - name: CIJOE, create target environment definiton
+      run: |
+        echo "#!/usr/bin/env bash" >> target_env.sh
+        echo "export SSH_HOST=localhost" >> target_env.sh
+        echo "export SSH_USER=root" >> target_env.sh
+        chmod +x target_env.sh
+
+    - name: CIJOE, run!
+      run: |
+        # Source in CIjOE
+        CIJ_ROOT=$(cij_root)
+        export CIJ_ROOT
+        echo "# CIJ_ROOT: ${CIJ_ROOT}"
+        pushd "$CIJ_ROOT" || exit 1
+        source modules/cijoe.sh
+        if ! source "$CIJ_ROOT/modules/cijoe.sh"; then
+          echo "Bad mojo"
+          exit
+        fi
+        popd || exit 1
+
+        # And Run it!
+        cij_runner $CIJ_TESTPLANS/example_01_usage.plan target_env.sh --output ${RESULTS}
+
+    - name: CIJOE, result-log-dump on error
+      if: failure()
+      run: |
+        find ${RESULTS} -name "*.log" | xargs cat {0}
+
+    - name: CIJOE, generate test-report
+      if: always()
+      run: |
+        # Source in CIjOE
+        CIJ_ROOT=$(cij_root)
+        export CIJ_ROOT
+        echo "# CIJ_ROOT: ${CIJ_ROOT}"
+        pushd "$CIJ_ROOT" || exit 1
+        source modules/cijoe.sh
+        if ! source "$CIJ_ROOT/modules/cijoe.sh"; then
+          echo "Bad mojo"
+          exit
+        fi
+        popd || exit 1
+
+        # Generate the report
+        cij_reporter ${RESULTS}
+
+    - name: CIJOE, upload test results and report
+      uses: actions/upload-artifact@v2
+      if: always()
+      with:
+        name: test-results
+        path: /tmp/results/*

@@ -16,7 +16,7 @@ foreach(SRC_FN ${SOURCE_FILES_EXAMPLES})
 	get_filename_component(SRC_FN_WE ${SRC_FN} NAME_WE)
 
 	set(EXE_NAME "${SRC_FN_WE}-EXAMPLES")
-	set(EXE_FN "${SRC_FN_WE}")
+	set(EXE_FN "${PROJECT_NAME}_${SRC_FN_WE}")
 
 	add_executable(${EXE_NAME} ${SRC_FN})
 	set_target_properties(${EXE_NAME} PROPERTIES

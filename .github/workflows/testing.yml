@@ -1,0 +1,86 @@
+name: testing
+
+env:
+  PROJECT_NAME: foobar
+
+on:
+  push:
+    branches: [ testing ]
+  pull_request:
+    branches: [ testing ]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+
+  vroom:
+
+    runs-on: self-hosted
+    container:
+      image: refenv/qemu-nvme:latest
+      options: --privileged
+
+    steps:
+    - name: Define stuff
+      run: |
+        echo "::set-env name=ARTIFACTS::/tmp/artifacts"
+        echo "::set-env name=ARTIFACTS_LATEST::/tmp/artifacts/latest"
+        echo "::set-env name=RESULTS::/tmp/results"
+        echo "::set-env name=RESULTS_LATEST::/tmp/results/latest"
+        echo "::set-env name=TARGET_ENV::/opt/envs/localhost-qemu.sh"
+
+    - name: Start the SSH server
+      run: |
+        service ssh restart
+
+    - name: QEMU, provision cloud-image
+      run: |
+        source /opt/scripts/suitup.sh
+
+        # Adjust the cloud-init user-data
+        echo "ssh_authorized_keys:" >> ${QEMU_GUESTS}/${QEMU_GUEST_NAME}/user-data
+        echo -n "- " >> ${QEMU_GUESTS}/${QEMU_GUEST_NAME}/user-data
+        cat /root/.ssh/id_rsa.pub >> ${QEMU_GUESTS}/${QEMU_GUEST_NAME}/user-data
+
+        # Fire it up!
+        qemu::img_from_url "https://bit.ly/2Dyg4Xd"
+
+    - name: QEMU, start the guest
+      run: |
+        source /opt/scripts/suitup.sh
+        qemu::run
+
+    - name: CIJOE, Lets goooo!
+      run: |
+        source /opt/scripts/suitup.sh
+
+        cij_runner \
+          $CIJ_TESTPLANS/example_01_usage.plan \
+          ${TARGET_ENV} \
+          --output ${RESULTS_LATEST}
+
+    - name: QEMU, kill the guest
+      run: |
+        source /opt/scripts/suitup.sh
+        qemu::kill
+
+    - name: CIJOE, result-log-dump on error
+      if: failure()
+      run: |
+        find ${RESULTS} -name "*.log" | xargs cat {0}
+
+    - name: CIJOE, generate test-report
+      if: always()
+      run: |
+        source /opt/scripts/suitup.sh
+
+        cij_reporter ${RESULTS}
+
+    - name: CIJOE, upload test results and report
+      uses: actions/upload-artifact@v2
+      if: always()
+      with:
+        name: test-results
+        path: /tmp/results/*
