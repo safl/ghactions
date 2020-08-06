@@ -1,8 +1,5 @@
 name: testing
 
-env:
-  PROJECT_NAME: foobar
-
 on:
   push:
     branches: [ testing ]
@@ -11,7 +8,7 @@ on:
 
 defaults:
   run:
-    shell: bash
+    shell: bash -l {0}
 
 jobs:
 
@@ -31,52 +28,37 @@ jobs:
         echo "::set-env name=RESULTS_LATEST::/tmp/results/latest"
         echo "::set-env name=TARGET_ENV::/opt/envs/localhost-qemu.sh"
 
+    - name: Create result and artifacts directories
+      run: |
+        mkdir -p ${ARTIFACTS_LATEST}
+        mkdir -p ${RESULTS_LATEST}
+
     - name: Start the SSH server
-      run: |
-        service ssh restart
+      run: service ssh restart
 
-    - name: QEMU, provision cloud-image
-      run: |
-        source /opt/scripts/suitup.sh
-
-        # Adjust the cloud-init user-data
-        echo "ssh_authorized_keys:" >> ${QEMU_GUESTS}/${QEMU_GUEST_NAME}/user-data
-        echo -n "- " >> ${QEMU_GUESTS}/${QEMU_GUEST_NAME}/user-data
-        cat /root/.ssh/id_rsa.pub >> ${QEMU_GUESTS}/${QEMU_GUEST_NAME}/user-data
-
-        # Fire it up!
-        qemu::img_from_url "https://bit.ly/2Dyg4Xd"
+    - name: QEMU, provision guest using Debian cloud image
+      run: qemu::img_from_url "https://bit.ly/2Dyg4Xd"
 
     - name: QEMU, start the guest
-      run: |
-        source /opt/scripts/suitup.sh
-        qemu::run
+      run: qemu::run
 
-    - name: CIJOE, Lets goooo!
+    - name: CIJOE, invoke the test-runner targeting the qemu-guest
       run: |
-        source /opt/scripts/suitup.sh
-
         cij_runner \
           $CIJ_TESTPLANS/example_01_usage.plan \
           ${TARGET_ENV} \
           --output ${RESULTS_LATEST}
 
     - name: QEMU, kill the guest
-      run: |
-        source /opt/scripts/suitup.sh
-        qemu::kill
+      run: qemu::kill
 
     - name: CIJOE, result-log-dump on error
       if: failure()
-      run: |
-        find ${RESULTS} -name "*.log" | xargs cat {0}
+      run: find ${RESULTS} -name "*.log" | xargs cat
 
     - name: CIJOE, generate test-report
       if: always()
-      run: |
-        source /opt/scripts/suitup.sh
-
-        cij_reporter ${RESULTS}
+      run: cij_reporter ${RESULTS_LATEST}
 
     - name: CIJOE, upload test results and report
       uses: actions/upload-artifact@v2
