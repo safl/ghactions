@@ -8,7 +8,7 @@ on:
 
 defaults:
   run:
-    shell: bash --rcfile /opt/scripts/suitup.sh {0}
+    shell: bash
 
 jobs:
 
@@ -37,20 +37,27 @@ jobs:
       run: service ssh restart
 
     - name: QEMU, provision guest using Debian cloud image
-      run: qemu::img_from_url "https://bit.ly/2Dyg4Xd"
+      run: |
+        source /opt/scripts/suitup.sh
+        qemu::img_from_url "https://bit.ly/2Dyg4Xd"
 
     - name: QEMU, start the guest
-      run: qemu::run
+      run: |
+        source /opt/scripts/suitup.sh
+        qemu::run
 
     - name: CIJOE, invoke the test-runner targeting the qemu-guest
       run: |
+        source /opt/scripts/suitup.sh
         cij_runner \
           $CIJ_TESTPLANS/example_01_usage.plan \
           ${TARGET_ENV} \
           --output ${RESULTS_LATEST}
 
     - name: QEMU, kill the guest
-      run: qemu::kill
+      run: |
+        source /opt/scripts/suitup.sh
+        qemu::kill
 
     - name: CIJOE, result-log-dump on error
       if: failure()
@@ -58,7 +65,9 @@ jobs:
 
     - name: CIJOE, generate test-report
       if: always()
-      run: cij_reporter ${RESULTS_LATEST}
+      run: |
+        source /opt/scripts/suitup.sh
+        cij_reporter ${RESULTS_LATEST}
 
     - name: CIJOE, upload test results and report
       uses: actions/upload-artifact@v2
