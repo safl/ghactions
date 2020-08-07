@@ -8,7 +8,7 @@ on:
 
 defaults:
   run:
-    shell: bash -c "source /opt/scripts/suitup.sh" {0}
+    shell: bash --rcfile /opt/scripts/suitup.sh {0}
 
 jobs:
 
